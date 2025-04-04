@@ -1,0 +1,64 @@
+name: Sync upstream and push manifests to MinIO
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # ogni ora
+  workflow_dispatch:
+
+jobs:
+  sync-and-upload:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_ACCESS_KEY_ID: 3jNHUgYyfMrU+WLeRq2FgcZbFrE1mgd/AyNcuZJ9
+      AWS_SECRET_ACCESS_KEY: ETDpIWbsohuq0tnDer8z+qfXb6Nv+1+2v0Bsyn9V
+      AWS_DEFAULT_REGION: eu-central-1
+      MINIO_ENDPOINT: https://console.v1.idruide.dev
+      BUCKET_NAME: winget-test
+      GH_TOKEN: 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
+
+    steps:
+    - name: Checkout fork
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: true
+
+    - name: Set up Git
+      run: |
+        git config user.name "edgar86cru"
+        git config user.email "edgar86cru@gmail.com"
+
+    - name: Add upstream remote and fetch
+      run: |
+        git remote add upstream https://github.com/microsoft/winget-pkgs.git
+        git fetch upstream
+
+    - name: Merge upstream changes (prefer upstream)
+      run: |
+        git checkout master
+        git merge upstream/master --allow-unrelated-histories -X theirs --commit --no-edit || echo "Already up to date"
+
+    - name: Push merged changes to origin
+      run: |
+        git remote set-url origin https://${{ env.GH_TOKEN }}@github.com/edgar86cru/winget-pkgs.git
+        git push origin master || echo "Nothing to push"
+
+    - name: Get changed files in manifests/
+      id: changes
+      run: |
+        git fetch origin ${{ github.event.before }}
+        CHANGED=$(git diff --name-only ${{ github.event.before }} ${{ github.sha }} -- 'manifests/*')
+        echo "Changed files:"
+        echo "$CHANGED"
+        echo "$CHANGED" > changed_files.txt
+        echo "has_changes=$(if [ -s changed_files.txt ]; then echo 'true'; else echo 'false'; fi)" >> $GITHUB_OUTPUT
+
+    - name: Upload changed files to MinIO
+      if: steps.changes.outputs.has_changes == 'true'
+      run: |
+        while IFS= read -r file; do
+          if [ -f "$file" ]; then
+            echo "Uploading $file..."
+            aws s3 cp "$file" "s3://${BUCKET_NAME}/${file}" --endpoint-url "$MINIO_ENDPOINT"
+          fi
+        done < changed_files.txt
